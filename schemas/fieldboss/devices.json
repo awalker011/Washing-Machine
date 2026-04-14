@@ -1,0 +1,95 @@
+{
+  "entity_name": "Devices",
+  "output_columns": [
+    "Device Name*",
+    "Device Number",
+    "Device ID",
+    "Legacy Building ID",
+    "Building Location",
+    "Derived Building Name",
+    "Account",
+    "Device Type",
+    "Device Drive",
+    "Device Application",
+    "Location In Building",
+    "Location Mechanical Room",
+    "Manufacturer"
+  ],
+  "fields": {
+    "Device Name*": { "type": "string", "required": true },
+    "Device Number": { "type": "string", "required": false },
+    "Device ID": { "type": "string", "required": false },
+    "Legacy Building ID": { "type": "string", "required": false },
+    "Building Location": { "type": "string", "required": false },
+    "Derived Building Name": { "type": "string", "required": false },
+    "Account": { "type": "string", "required": false },
+    "Device Type": { "type": "string", "required": false, "disallow_values": ["???"] },
+    "Device Drive": { "type": "string", "required": false },
+    "Manufacturer": { "type": "string", "required": false }
+  },
+  "cross_field_rules": [
+    {
+      "type": "fields_match",
+      "fields": ["Building Location", "Derived Building Name"],
+      "message": "Building Location and Derived Building Name should match when both are populated."
+    }
+  ],
+  "relationship_rules": [
+    {
+      "type": "must_exist_in_entity",
+      "field": "Building Location",
+      "other_entity": "Building Locations",
+      "other_field": "Name*",
+      "message": "Building Location must exactly match a Name* value on the Building Locations sheet."
+    },
+    {
+      "type": "must_exist_in_entity",
+      "field": "Account",
+      "other_entity": "Accounts",
+      "other_field": "Account Name*",
+      "message": "Account must exactly match an Account Name* value on the Accounts sheet."
+    },
+    {
+      "type": "related_field_equals",
+      "field": "Account",
+      "lookup_field": "Building Location",
+      "other_entity": "Building Locations",
+      "other_lookup_field": "Name*",
+      "other_value_field": "Customer (Account - for Invoicing)",
+      "message": "Device Account does not match the account assigned to the referenced Building Location."
+    },
+    {
+      "type": "related_field_equals",
+      "field": "Building Location",
+      "lookup_field": "Legacy Building ID",
+      "other_entity": "Building Locations",
+      "other_lookup_field": "Legacy Building #",
+      "other_value_field": "Name*",
+      "message": "Legacy Building ID points to a different Building Location than the one provided on the Device row."
+    }
+  ],
+  "duplicate_rules": [
+    {
+      "name": "device_id_exact",
+      "type": "exact",
+      "fields": ["Device ID"],
+      "exclude": true,
+      "message": "Duplicate Device ID values were found in Devices."
+    },
+    {
+      "name": "device_number_exact",
+      "type": "exact",
+      "fields": ["Device Number"],
+      "exclude": true,
+      "message": "Duplicate Device Number values were found in Devices."
+    },
+    {
+      "name": "device_name_location_potential",
+      "type": "potential",
+      "fields": ["Device Name*", "Building Location"],
+      "normalization": "loose",
+      "exclude": false,
+      "message": "Potential duplicate Devices were found after normalizing Device Name* and Building Location."
+    }
+  ]
+}

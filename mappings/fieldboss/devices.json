@@ -1,0 +1,23 @@
+{
+  "entity_name": "Devices",
+  "schema": "Devices",
+  "source_patterns": ["*.xlsx", "Devices*.csv"],
+  "sheet_name": "Devices",
+  "target_file": "Devices.csv",
+  "error_file": "Devices_errors.csv",
+  "transformations": {
+    "Device Name*": ["trim", "collapse_whitespace"],
+    "Device Number": ["trim", "collapse_whitespace"],
+    "Device ID": ["trim", "collapse_whitespace"],
+    "Legacy Building ID": ["trim", "collapse_whitespace"],
+    "Building Location": ["trim", "collapse_whitespace"],
+    "Derived Building Name": ["trim", "collapse_whitespace"],
+    "Account": ["trim", "collapse_whitespace"],
+    "Device Type": ["trim", "collapse_whitespace"],
+    "Device Drive": ["trim", "collapse_whitespace"],
+    "Device Application": ["trim", "collapse_whitespace"],
+    "Location In Building": ["trim", "collapse_whitespace"],
+    "Location Mechanical Room": ["trim", "collapse_whitespace"],
+    "Manufacturer": ["trim", "collapse_whitespace"]
+  }
+}

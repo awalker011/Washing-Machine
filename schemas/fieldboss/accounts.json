@@ -1,0 +1,129 @@
+{
+  "entity_name": "Accounts",
+  "output_columns": [
+    "Account Name*",
+    "Legacy Customer #",
+    "Account Type",
+    "Parent Account",
+    "Account Number\n(Non-Integrated)",
+    "Legacy Customer Number",
+    "Credit Hold",
+    "Price List",
+    "Payment Terms",
+    "Address 1: Street 1",
+    "Address 1: Street 2",
+    "Address 1: Street 3",
+    "Address 1: City",
+    "Address 1: State/Province",
+    "Address 1: ZIP/Postal Code",
+    "Address 1: Country/Region",
+    "Main Phone",
+    "Company Fax",
+    "Primary Contact",
+    "Print Invoice for Mailing?",
+    "Email Invoice?\n(Account Email)",
+    "Email Invoice?\n(Billing Contacts)",
+    "Account Email",
+    "Billing Contact",
+    "Billing Contact 2",
+    "Billing Contact 3",
+    "Billing Comments",
+    "Account Manager \n(Internal Salesperson)"
+  ],
+  "fields": {
+    "Account Name*": { "type": "string", "required": true },
+    "Legacy Customer #": { "type": "string", "required": false },
+    "Account Type": { "type": "string", "required": false, "disallow_values": ["???"] },
+    "Parent Account": { "type": "string", "required": false },
+    "Credit Hold": { "type": "boolean", "required": false },
+    "Address 1: Street 1": { "type": "string", "required": false },
+    "Address 1: City": { "type": "string", "required": false },
+    "Address 1: State/Province": {
+      "type": "string",
+      "required": false,
+      "format": "region_code_by_country",
+      "country_field": "Address 1: Country/Region"
+    },
+    "Address 1: ZIP/Postal Code": { "type": "string", "required": false, "format": "postal_code_us_ca" },
+    "Address 1: Country/Region": { "type": "string", "required": false, "allowed_values": ["US", "CA"] },
+    "Main Phone": { "type": "string", "required": false, "format": "phone" },
+    "Company Fax": { "type": "string", "required": false, "format": "phone" },
+    "Primary Contact": { "type": "string", "required": false },
+    "Print Invoice for Mailing?": { "type": "boolean", "required": false },
+    "Email Invoice?\n(Account Email)": { "type": "boolean", "required": false },
+    "Email Invoice?\n(Billing Contacts)": { "type": "boolean", "required": false },
+    "Account Email": { "type": "boolean", "required": false },
+    "Billing Contact": { "type": "string", "required": false, "format": "email" },
+    "Billing Contact 2": { "type": "string", "required": false, "format": "email" },
+    "Billing Contact 3": { "type": "string", "required": false, "format": "email" }
+  },
+  "cross_field_rules": [
+    {
+      "type": "fields_not_equal",
+      "fields": ["Account Name*", "Parent Account"],
+      "message": "Parent Account cannot reference the same Account Name*."
+    },
+    {
+      "type": "required_if_any",
+      "trigger_fields": [
+        "Address 1: City",
+        "Address 1: State/Province",
+        "Address 1: ZIP/Postal Code"
+      ],
+      "required_fields": [
+        "Address 1: Street 1",
+        "Address 1: City",
+        "Address 1: State/Province"
+      ],
+      "message": "If structured account address data is provided, Street 1, City, and State/Province must all be populated."
+    }
+  ],
+  "entity_rules": [
+    {
+      "type": "no_parent_cycles",
+      "id_field": "Account Name*",
+      "parent_field": "Parent Account",
+      "message": "Parent Account creates a circular relationship chain."
+    }
+  ],
+  "relationship_rules": [
+    {
+      "type": "must_exist_in_entity",
+      "field": "Parent Account",
+      "other_entity": "Accounts",
+      "other_field": "Account Name*",
+      "message": "Parent Account must exactly match an Account Name* value on the Accounts sheet."
+    },
+    {
+      "type": "must_exist_in_entity",
+      "field": "Primary Contact",
+      "other_entity": "Contacts",
+      "other_field": "Full Name (Auto)",
+      "message": "Primary Contact must exactly match a Contact full name on the Contacts sheet."
+    }
+  ],
+  "duplicate_rules": [
+    {
+      "name": "legacy_customer_number_exact",
+      "type": "exact",
+      "fields": ["Legacy Customer #"],
+      "exclude": true,
+      "message": "Duplicate Legacy Customer # values were found in Accounts."
+    },
+    {
+      "name": "account_name_exact",
+      "type": "exact",
+      "fields": ["Account Name*"],
+      "exclude": true,
+      "message": "Duplicate Account Name* values were found in Accounts."
+    },
+    {
+      "name": "account_name_potential",
+      "type": "potential",
+      "fields": ["Account Name*"],
+      "normalization": "loose",
+      "exclude": false,
+      "message": "Potential duplicate Accounts were found after normalizing Account Name*."
+    }
+  ]
+}

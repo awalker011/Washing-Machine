@@ -1,0 +1,27 @@
+{
+  "entity_name": "Contacts",
+  "schema": "Contacts",
+  "source_patterns": ["*.xlsx", "Contacts*.csv"],
+  "sheet_name": "Contacts",
+  "target_file": "Contacts.csv",
+  "error_file": "Contacts_errors.csv",
+  "transformations": {
+    "First Name": ["trim", "collapse_whitespace"],
+    "Last Name*": ["trim", "collapse_whitespace"],
+    "Full Name (Auto)": [
+      {
+        "name": "concat_fields",
+        "fields": ["First Name", "Last Name*"],
+        "separator": " ",
+        "only_if_blank": true
+      },
+      "trim",
+      "collapse_whitespace"
+    ],
+    "Company Name (Account)": ["trim", "collapse_whitespace"],
+    "Email": ["trim", "lowercase"],
+    "Business Phone": ["trim"],
+    "Mobile Phone": ["trim"],
+    "Fax": ["trim"]
+  }
+}

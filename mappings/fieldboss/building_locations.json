@@ -1,0 +1,31 @@
+{
+  "entity_name": "Building Locations",
+  "schema": "Building Locations",
+  "source_patterns": ["*.xlsx", "Building Locations*.csv"],
+  "sheet_name": "Building Locations",
+  "target_file": "Building Locations.csv",
+  "error_file": "Building Locations_errors.csv",
+  "transformations": {
+    "Name*": ["trim", "collapse_whitespace"],
+    "Customer (Account - for Invoicing)": ["trim", "collapse_whitespace"],
+    "Building Owner (Account - Optional)": ["trim", "collapse_whitespace"],
+    "Property Manager (Company)": ["trim", "collapse_whitespace"],
+    "Property Manager (Contact)": ["trim", "collapse_whitespace"],
+    "Contact (On Site)": ["trim", "collapse_whitespace"],
+    "Billing Contact 1": ["trim", "collapse_whitespace"],
+    "Billing Contact 2": ["trim", "collapse_whitespace"],
+    "Billing Contact 3": ["trim", "collapse_whitespace"],
+    "Billing Contact 4": ["trim", "collapse_whitespace"],
+    "Street": ["trim", "collapse_whitespace"],
+    "Unit": ["trim", "collapse_whitespace"],
+    "City": ["trim", "collapse_whitespace"],
+    "Province / State": [
+      "trim",
+      "collapse_whitespace",
+      {
+        "name": "normalize_region_code"
+      }
+    ],
+    "Postal / Zip": ["trim", "uppercase"]
+  }
+}

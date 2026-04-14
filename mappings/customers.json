@@ -1,0 +1,30 @@
+{
+  "entity_name": "customers",
+  "schema": "customers",
+  "source_patterns": ["customers*.csv", "customers*.xlsx"],
+  "target_file": "customers_standardized.csv",
+  "error_file": "customers_errors.csv",
+  "field_mappings": {
+    "Customer ID": "customer_id",
+    "Email Address": "email",
+    "First Name": "first_name",
+    "Surname": "last_name",
+    "Phone": "phone",
+    "Signup Date": "signup_date"
+  },
+  "transformations": {
+    "customer_id": ["trim"],
+    "email": ["trim", "lowercase"],
+    "first_name": ["trim"],
+    "last_name": ["trim"],
+    "phone": ["trim", { "name": "digits_only" }],
+    "signup_date": [
+      "trim",
+      {
+        "name": "date_format",
+        "input_formats": ["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"],
+        "output_format": "%Y-%m-%d"
+      }
+    ]
+  }
+}

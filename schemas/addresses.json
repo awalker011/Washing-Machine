@@ -1,0 +1,28 @@
+{
+  "entity_name": "addresses",
+  "output_columns": [
+    "address_id",
+    "customer_id",
+    "line_1",
+    "city",
+    "postcode",
+    "country"
+  ],
+  "fields": {
+    "address_id": { "type": "string", "required": true },
+    "customer_id": { "type": "string", "required": true },
+    "line_1": { "type": "string", "required": true },
+    "city": { "type": "string", "required": true },
+    "postcode": { "type": "string", "required": false },
+    "country": { "type": "string", "required": true, "default": "UK" }
+  },
+  "relationship_rules": [
+    {
+      "type": "must_exist_in_entity",
+      "field": "customer_id",
+      "other_entity": "customers",
+      "other_field": "customer_id",
+      "message": "Address customer_id must match a known customer_id in the customers file."
+    }
+  ]
+}

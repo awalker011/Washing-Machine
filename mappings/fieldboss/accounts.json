@@ -1,0 +1,67 @@
+{
+  "entity_name": "Accounts",
+  "schema": "Accounts",
+  "source_patterns": ["*.xlsx", "Accounts*.csv"],
+  "sheet_name": "Accounts",
+  "target_file": "Accounts.csv",
+  "error_file": "Accounts_errors.csv",
+  "transformations": {
+    "Account Name*": ["trim", "collapse_whitespace"],
+    "Parent Account": ["trim", "collapse_whitespace"],
+    "Address 1: Street 1": ["trim", "collapse_whitespace"],
+    "Address 1: City": [
+      {
+        "name": "repair_misaligned_address_component",
+        "component": "city"
+      },
+      "trim",
+      "collapse_whitespace"
+    ],
+    "Address 1: State/Province": [
+      {
+        "name": "repair_misaligned_address_component",
+        "component": "region"
+      },
+      "trim",
+      {
+        "name": "normalize_region_code",
+        "country_field": "Address 1: Country/Region"
+      }
+    ],
+    "Address 1: ZIP/Postal Code": [
+      {
+        "name": "repair_misaligned_address_component",
+        "component": "postal_code"
+      },
+      "trim",
+      "uppercase"
+    ],
+    "Address 1: Country/Region": [
+      {
+        "name": "repair_misaligned_address_component",
+        "component": "country"
+      },
+      "trim",
+      {
+        "name": "normalize_country_code"
+      },
+      "uppercase"
+    ],
+    "Primary Contact": ["trim", "collapse_whitespace"],
+    "Billing Contact": ["trim", "collapse_whitespace"],
+    "Billing Contact 2": ["trim", "collapse_whitespace"],
+    "Billing Contact 3": ["trim", "collapse_whitespace"],
+    "Account Email": ["trim", "lowercase"],
+    "Main Phone": [
+      {
+        "name": "repair_misaligned_address_component",
+        "component": "phone"
+      },
+      "trim"
+    ],
+    "Company Fax": ["trim"],
+    "Billing Contact": ["trim", "lowercase"],
+    "Billing Contact 2": ["trim", "lowercase"],
+    "Billing Contact 3": ["trim", "lowercase"]
+  }
+}

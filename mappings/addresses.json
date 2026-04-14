@@ -1,0 +1,26 @@
+{
+  "entity_name": "addresses",
+  "schema": "addresses",
+  "source_patterns": ["addresses*.csv", "addresses*.xlsx"],
+  "target_file": "addresses_standardized.csv",
+  "error_file": "addresses_errors.csv",
+  "field_mappings": {
+    "Address ID": "address_id",
+    "Customer ID": "customer_id",
+    "Address Line 1": "line_1",
+    "Town": "city",
+    "Post Code": "postcode",
+    "Country": "country"
+  },
+  "transformations": {
+    "address_id": ["trim"],
+    "customer_id": ["trim"],
+    "line_1": ["trim"],
+    "city": ["trim"],
+    "postcode": ["trim", "uppercase"],
+    "country": ["trim", "uppercase"]
+  },
+  "defaults": {
+    "country": "UK"
+  }
+}

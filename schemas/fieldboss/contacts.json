@@ -1,0 +1,70 @@
+{
+  "entity_name": "Contacts",
+  "output_columns": [
+    "First Name",
+    "Last Name*",
+    "Full Name (Auto)",
+    "Company Name (Account)",
+    "Contact Type",
+    "Job Title",
+    "Email",
+    "Business Phone",
+    "Mobile Phone",
+    "Fax",
+    "Description",
+    "Send maintenance time ticket",
+    "Send trouble call time ticket",
+    "Email trouble call confirmation"
+  ],
+  "fields": {
+    "First Name": { "type": "string", "required": false },
+    "Last Name*": { "type": "string", "required": true },
+    "Full Name (Auto)": { "type": "string", "required": false },
+    "Company Name (Account)": { "type": "string", "required": false },
+    "Contact Type": { "type": "string", "required": false, "disallow_values": ["???"] },
+    "Email": { "type": "string", "required": false, "format": "email" },
+    "Business Phone": { "type": "string", "required": false, "format": "phone" },
+    "Mobile Phone": { "type": "string", "required": false, "format": "phone" },
+    "Fax": { "type": "string", "required": false, "format": "phone" }
+  },
+  "relationship_rules": [
+    {
+      "type": "must_exist_in_entity",
+      "field": "Company Name (Account)",
+      "other_entity": "Accounts",
+      "other_field": "Account Name*",
+      "message": "Company Name (Account) must exactly match an Account Name* on the Accounts sheet."
+    }
+  ],
+  "duplicate_rules": [
+    {
+      "name": "contact_email_exact",
+      "type": "exact",
+      "fields": ["Email"],
+      "exclude": true,
+      "message": "Duplicate Email values were found in Contacts."
+    },
+    {
+      "name": "contact_name_company_exact",
+      "type": "exact",
+      "fields": ["First Name", "Last Name*", "Company Name (Account)"],
+      "exclude": true,
+      "message": "Duplicate First Name/Last Name*/Company combinations were found in Contacts."
+    },
+    {
+      "name": "contact_full_name_exact",
+      "type": "exact",
+      "fields": ["Full Name (Auto)"],
+      "exclude": false,
+      "message": "Duplicate Contact Full Name values were found in Contacts."
+    },
+    {
+      "name": "contact_name_company_potential",
+      "type": "potential",
+      "fields": ["First Name", "Last Name*", "Company Name (Account)"],
+      "normalization": "loose",
+      "exclude": false,
+      "message": "Potential duplicate Contacts were found after normalizing name/company values."
+    }
+  ]
+}

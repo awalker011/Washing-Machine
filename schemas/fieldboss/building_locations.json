@@ -1,0 +1,156 @@
+{
+  "entity_name": "Building Locations",
+  "output_columns": [
+    "Name*",
+    "Legacy Building #",
+    "# Elevators",
+    "Customer (Account - for Invoicing)",
+    "Building Owner (Account - Optional)",
+    "Property Manager (Company)",
+    "Price List",
+    "Tax Schedule",
+    "Tax Rate",
+    "Local",
+    "Street",
+    "Unit",
+    "City",
+    "Province / State",
+    "Postal / Zip",
+    "Property Manager (Contact)",
+    "Contact (On Site)",
+    "Print Invoice",
+    "Email Invoice",
+    "Manually Send Invoice",
+    "Billing Contact 1",
+    "Billing Contact 2",
+    "Billing Contact 3",
+    "Billing Contact 4",
+    "Primary Tech",
+    "Salesperson",
+    "Scheduling Notes (access)"
+  ],
+  "fields": {
+    "Name*": { "type": "string", "required": true },
+    "Legacy Building #": { "type": "string", "required": false },
+    "# Elevators": { "type": "integer", "required": false, "min_value": 0 },
+    "Customer (Account - for Invoicing)": { "type": "string", "required": false },
+    "Building Owner (Account - Optional)": { "type": "string", "required": false },
+    "Property Manager (Company)": { "type": "string", "required": false },
+    "Tax Rate": { "type": "float", "required": false, "min_value": 0 },
+    "Local": { "type": "string", "required": false },
+    "Street": { "type": "string", "required": false },
+    "Unit": { "type": "string", "required": false },
+    "City": { "type": "string", "required": false },
+    "Province / State": { "type": "string", "required": false },
+    "Postal / Zip": { "type": "string", "required": false, "format": "postal_code_us_ca" },
+    "Property Manager (Contact)": { "type": "string", "required": false },
+    "Contact (On Site)": { "type": "string", "required": false },
+    "Print Invoice": { "type": "boolean", "required": false },
+    "Email Invoice": { "type": "boolean", "required": false },
+    "Manually Send Invoice": { "type": "boolean", "required": false },
+    "Billing Contact 1": { "type": "string", "required": false },
+    "Billing Contact 2": { "type": "string", "required": false },
+    "Billing Contact 3": { "type": "string", "required": false },
+    "Billing Contact 4": { "type": "string", "required": false }
+  },
+  "cross_field_rules": [
+    {
+      "type": "required_if_any",
+      "trigger_fields": ["Local", "Street", "Unit", "City", "Province / State", "Postal / Zip"],
+      "required_fields": ["Street", "City", "Province / State"],
+      "message": "If any building address data is provided, Street, City, and Province / State must all be populated."
+    }
+  ],
+  "entity_rules": [
+    {
+      "type": "child_count_lte_reference",
+      "child_entity": "Devices",
+      "parent_lookup_field": "Name*",
+      "child_lookup_field": "Building Location",
+      "limit_field": "# Elevators",
+      "message": "Assigned device count exceeds # Elevators for this building."
+    }
+  ],
+  "relationship_rules": [
+    {
+      "type": "must_exist_in_entity",
+      "field": "Customer (Account - for Invoicing)",
+      "other_entity": "Accounts",
+      "other_field": "Account Name*",
+      "message": "Customer (Account - for Invoicing) must exactly match an Account Name* on the Accounts sheet."
+    },
+    {
+      "type": "must_exist_in_entity",
+      "field": "Building Owner (Account - Optional)",
+      "other_entity": "Accounts",
+      "other_field": "Account Name*",
+      "message": "Building Owner (Account - Optional) must exactly match an Account Name* on the Accounts sheet."
+    },
+    {
+      "type": "must_exist_in_entity",
+      "field": "Property Manager (Company)",
+      "other_entity": "Accounts",
+      "other_field": "Account Name*",
+      "message": "Property Manager (Company) must exactly match an Account Name* on the Accounts sheet."
+    },
+    {
+      "type": "must_exist_in_entity",
+      "field": "Property Manager (Contact)",
+      "other_entity": "Contacts",
+      "other_field": "Full Name (Auto)",
+      "message": "Property Manager (Contact) must exactly match a Contact full name on the Contacts sheet."
+    },
+    {
+      "type": "must_exist_in_entity",
+      "field": "Billing Contact 1",
+      "other_entity": "Contacts",
+      "other_field": "Full Name (Auto)",
+      "message": "Billing Contact 1 must exactly match a Contact full name on the Contacts sheet."
+    },
+    {
+      "type": "must_exist_in_entity",
+      "field": "Billing Contact 2",
+      "other_entity": "Contacts",
+      "other_field": "Full Name (Auto)",
+      "message": "Billing Contact 2 must exactly match a Contact full name on the Contacts sheet."
+    },
+    {
+      "type": "must_exist_in_entity",
+      "field": "Billing Contact 3",
+      "other_entity": "Contacts",
+      "other_field": "Full Name (Auto)",
+      "message": "Billing Contact 3 must exactly match a Contact full name on the Contacts sheet."
+    },
+    {
+      "type": "must_exist_in_entity",
+      "field": "Billing Contact 4",
+      "other_entity": "Contacts",
+      "other_field": "Full Name (Auto)",
+      "message": "Billing Contact 4 must exactly match a Contact full name on the Contacts sheet."
+    }
+  ],
+  "duplicate_rules": [
+    {
+      "name": "legacy_building_exact",
+      "type": "exact",
+      "fields": ["Legacy Building #"],
+      "exclude": true,
+      "message": "Duplicate Legacy Building # values were found in Building Locations."
+    },
+    {
+      "name": "location_name_exact",
+      "type": "exact",
+      "fields": ["Name*", "Customer (Account - for Invoicing)"],
+      "exclude": true,
+      "message": "Duplicate Name*/Customer combinations were found in Building Locations."
+    },
+    {
+      "name": "location_name_potential",
+      "type": "potential",
+      "fields": ["Name*", "Customer (Account - for Invoicing)"],
+      "normalization": "loose",
+      "exclude": false,
+      "message": "Potential duplicate Building Locations were found after normalizing Name* and Customer values."
+    }
+  ]
+}
