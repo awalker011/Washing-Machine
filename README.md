@@ -17,12 +17,6 @@ After installing the project:
 - choose or create an output folder
 - click **Start Wash Cycle**
 
-## Run the CLI
-
-```bash
-standardize --input ./input/your-file.xlsx --schema ./schemas/fieldboss --mapping ./mappings/fieldboss --output ./output --logs ./logs
-```
-
 ## Outputs
 Each run produces:
 - one cleaned CSV per configured entity
