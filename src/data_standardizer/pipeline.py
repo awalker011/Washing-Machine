@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -374,26 +375,172 @@ def _map_row(raw_row: dict[str, Any], mapping: dict, schema: dict) -> dict[str, 
     schema_fields = schema.get("fields", {})
 
     standardized = {column: None for column in output_columns}
+    
+    # Build case-insensitive lookup for raw_row
+    raw_row_lookup = _build_header_lookup(list(raw_row.keys()), case_sensitive=False)
 
+    # Apply explicit field mappings
     for source_column, target_field in field_mappings.items():
-        standardized[target_field] = raw_row.get(_normalize_header(source_column))
+        normalized_source = _normalize_header(source_column, case_sensitive=False)
+        matched_source = raw_row_lookup.get(normalized_source)
+        if matched_source:
+            standardized[target_field] = raw_row.get(matched_source)
 
+    # Apply column matching with fallback strategies
     for target_field in output_columns:
-        if is_blank(standardized.get(target_field)) and target_field in raw_row:
-            standardized[target_field] = raw_row.get(target_field)
+        if not is_blank(standardized.get(target_field)):
+            continue  # Already found value via field mapping
+            
+        # Strategy 1: Direct key match with normalization
+        normalized_target = _normalize_header(target_field, case_sensitive=False)
+        matched = raw_row_lookup.get(normalized_target)
+        if matched:
+            standardized[target_field] = raw_row.get(matched)
+            continue
 
-        if is_blank(standardized.get(target_field)) and target_field in mapping_defaults:
+        # Strategy 2: Try without trailing asterisk (for required field indicators)
+        if target_field.endswith('*'):
+            field_without_asterisk = target_field[:-1]
+            normalized_without_asterisk = _normalize_header(field_without_asterisk, case_sensitive=False)
+            matched = raw_row_lookup.get(normalized_without_asterisk)
+            if matched:
+                standardized[target_field] = raw_row.get(matched)
+                continue
+
+        # Strategy 3: Use mapping defaults
+        if target_field in mapping_defaults:
             standardized[target_field] = mapping_defaults[target_field]
+            continue
 
+        # Strategy 4: Use schema defaults
         field_config = schema_fields.get(target_field, {})
-        if is_blank(standardized.get(target_field)) and "default" in field_config:
+        if "default" in field_config:
             standardized[target_field] = field_config["default"]
 
     return standardized
 
 
-def _normalize_header(value: Any) -> str:
-    return "" if value is None else str(value).strip()
+def _normalize_header(value: Any, *, case_sensitive: bool = False) -> str:
+    """
+    Normalize a header name for consistent matching.
+    
+    Handles:
+    - None/empty values
+    - Leading/trailing whitespace
+    - Internal whitespace (multiple spaces, tabs, newlines)
+    - Case normalization (optional)
+    
+    Args:
+        value: The header name to normalize
+        case_sensitive: If False, convert to lowercase for matching
+    
+    Returns:
+        Normalized header string
+    """
+    if value is None:
+        return ""
+    
+    # Convert to string and handle common separators
+    text = str(value).strip()
+    
+    # Replace various whitespace characters (newlines, tabs, etc.) with single space
+    text = re.sub(r'[\r\n\t]+', ' ', text)
+    
+    # Collapse multiple spaces into single space
+    text = re.sub(r' +', ' ', text).strip()
+
+    # Canonicalize common State/Province variants so mappings stay consistent.
+    text = re.sub(r"\s*/\s*", "/", text)
+    text = re.sub(r"\bprovince/state\b", "state/province", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"\b(address\s*\d*\s*:\s*)state\b(?!\s*/\s*province)",
+        r"\1state/province",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r":\s*state$", ": state/province", text, flags=re.IGNORECASE)
+    if re.fullmatch(r"state", text, flags=re.IGNORECASE):
+        text = "state/province"
+    
+    # Optionally normalize case
+    if not case_sensitive:
+        text = text.casefold()
+    
+    return text
+
+
+def _build_header_lookup(headers: list[str], case_sensitive: bool = False) -> dict[str, str]:
+    """
+    Build a lookup map from normalized headers to original headers.
+    
+    Helps identify cases where headers differ only by normalization issues.
+    """
+    lookup = {}
+    for header in headers:
+        normalized = _normalize_header(header, case_sensitive=case_sensitive)
+        if normalized:
+            lookup[normalized] = header
+    return lookup
+
+
+def _find_matching_headers(source_headers: list[str], expected_headers: list[str], case_sensitive: bool = False) -> dict[str, str | None]:
+    """
+    Match source headers to expected headers, handling normalization.
+    
+    Returns:
+        Dict mapping expected header names to found source headers (or None if not found)
+    """
+    source_lookup = _build_header_lookup(source_headers, case_sensitive=case_sensitive)
+    matches = {}
+    
+    for expected in expected_headers:
+        normalized_expected = _normalize_header(expected, case_sensitive=case_sensitive)
+        matches[expected] = source_lookup.get(normalized_expected)
+    
+    return matches
+
+
+def _validate_columns(
+    source_headers: list[str],
+    expected_headers: list[str] | None,
+    entity_name: str,
+    file_name: str,
+    case_sensitive: bool = False,
+) -> tuple[dict[str, str | None], list[str]]:
+    """
+    Validate that expected columns exist in source headers.
+    
+    Returns:
+        Tuple of (matches dict, list of warnings)
+    """
+    warnings = []
+    
+    if not expected_headers:
+        return {}, warnings
+    
+    matches = _find_matching_headers(source_headers, expected_headers, case_sensitive=case_sensitive)
+    
+    # Find missing required columns
+    missing = [h for h, match in matches.items() if match is None and h.endswith('*')]
+    if missing:
+        warnings.append(
+            f"Entity '{entity_name}' in '{file_name}': "
+            f"Missing required columns: {', '.join(missing)}"
+        )
+    
+    # Find unmapped source columns (optional warning)
+    matched_sources = set(m for m in matches.values() if m is not None)
+    normalized_sources = set(_normalize_header(h, case_sensitive=case_sensitive) for h in source_headers)
+    matched_normalized = set(_normalize_header(h, case_sensitive=case_sensitive) for h in matched_sources)
+    unmapped = normalized_sources - matched_normalized
+    
+    if unmapped:
+        warnings.append(
+            f"Entity '{entity_name}' in '{file_name}': "
+            f"Source columns not used in schema: {', '.join(unmapped)}"
+        )
+    
+    return matches, warnings
 
 
 def _detect_duplicates(

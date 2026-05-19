@@ -175,3 +175,86 @@ def test_process_all_raises_when_configured_sheet_is_missing(tmp_path):
             output_dir=str(tmp_path / "output"),
             logs_dir=str(tmp_path / "logs"),
         )
+
+
+def test_process_all_normalizes_state_header_variants(tmp_path):
+    input_dir = tmp_path / "input"
+    schema_dir = tmp_path / "schemas"
+    mapping_dir = tmp_path / "mappings"
+    output_dir = tmp_path / "output"
+    logs_dir = tmp_path / "logs"
+
+    input_dir.mkdir()
+    schema_dir.mkdir()
+    mapping_dir.mkdir()
+
+    (input_dir / "accounts.csv").write_text(
+        "Address 1: Street 1,Address 1: City,Address 1: State,Address 1: ZIP/Postal Code\n"
+        "100 Main St,Chadds Ford,PA,19317\n",
+        encoding="utf-8",
+    )
+
+    (schema_dir / "accounts.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Accounts",
+                "output_columns": [
+                    "Address 1: Street 1",
+                    "Address 1: City",
+                    "Address 1: State/Province",
+                    "Address 1: ZIP/Postal Code",
+                ],
+                "fields": {
+                    "Address 1: Street 1": {"type": "string", "required": False},
+                    "Address 1: City": {"type": "string", "required": False},
+                    "Address 1: State/Province": {"type": "string", "required": False},
+                    "Address 1: ZIP/Postal Code": {"type": "string", "required": False},
+                },
+                "cross_field_rules": [
+                    {
+                        "type": "required_if_any",
+                        "trigger_fields": [
+                            "Address 1: City",
+                            "Address 1: State/Province",
+                            "Address 1: ZIP/Postal Code",
+                        ],
+                        "required_fields": [
+                            "Address 1: Street 1",
+                            "Address 1: City",
+                            "Address 1: State/Province",
+                        ],
+                        "message": "If structured account address data is provided, Street 1, City, and State/Province must all be populated.",
+                    }
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    (mapping_dir / "accounts.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Accounts",
+                "schema": "Accounts",
+                "source_patterns": ["accounts.csv"],
+                "target_file": "Accounts.csv",
+                "error_file": "Accounts_errors.csv",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    process_all(
+        input_path=str(input_dir),
+        schema_path=str(schema_dir),
+        mapping_path=str(mapping_dir),
+        output_dir=str(output_dir),
+        logs_dir=str(logs_dir),
+    )
+
+    with (output_dir / "Accounts_errors.csv").open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert rows == []

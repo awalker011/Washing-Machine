@@ -458,3 +458,51 @@ def apply_transformations(
                 issues.append((field_name, str(exc)))
 
     return transformed, issues
+
+
+def apply_transformations_with_audit(
+    record: dict[str, Any], transformations: dict[str, list[Any]]
+) -> tuple[dict[str, Any], list[tuple[str, str]], dict[str, list[dict[str, Any]]]]:
+    """
+    Apply transformations to a record with audit trail tracking.
+    
+    Returns:
+        Tuple of (transformed_record, issues_list, audit_trail_dict)
+        where audit_trail_dict maps field names to lists of transformation steps
+    """
+    transformed = dict(record)
+    issues: list[tuple[str, str]] = []
+    audit_trail: dict[str, list[dict[str, Any]]] = {}
+
+    for field_name, operations in transformations.items():
+        audit_trail[field_name] = []
+        current_value = transformed.get(field_name)
+        
+        for operation in operations or []:
+            previous_value = current_value
+            operation_name = operation if isinstance(operation, str) else operation.get("name", "unknown")
+            
+            try:
+                current_value = apply_operation(current_value, operation, transformed)
+                
+                # Record transformation step
+                audit_trail[field_name].append({
+                    "operation": operation_name,
+                    "input": previous_value,
+                    "output": current_value,
+                    "success": True
+                })
+                transformed[field_name] = current_value
+                
+            except Exception as exc:  # pragma: no cover - defensive reporting path
+                audit_trail[field_name].append({
+                    "operation": operation_name,
+                    "input": previous_value,
+                    "output": None,
+                    "error": str(exc),
+                    "success": False
+                })
+                issues.append((field_name, str(exc)))
+                break  # Stop processing this field if transformation fails
+
+    return transformed, issues, audit_trail

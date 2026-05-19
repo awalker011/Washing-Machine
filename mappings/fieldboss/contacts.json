@@ -5,6 +5,22 @@
   "sheet_name": "Contacts",
   "target_file": "Contacts.csv",
   "error_file": "Contacts_errors.csv",
+  "field_mappings": {
+    "First Name": "First Name",
+    "Last Name": "Last Name*",
+    "Full Name (Auto)": "Full Name (Auto)",
+    "Company Name (Account)": "Company Name (Account)",
+    "Contact Type": "Contact Type",
+    "Job Title": "Job Title",
+    "Email": "Email",
+    "Business Phone": "Business Phone",
+    "Mobile Phone": "Mobile Phone",
+    "Fax": "Fax",
+    "Description": "Description",
+    "Send maintenance time ticket": "Send maintenance time ticket",
+    "Send trouble call time ticket": "Send trouble call time ticket",
+    "Email trouble call confirmation": "Email trouble call confirmation"
+  },
   "transformations": {
     "First Name": ["trim", "collapse_whitespace"],
     "Last Name*": ["trim", "collapse_whitespace"],

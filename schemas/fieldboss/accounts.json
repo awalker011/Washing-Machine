@@ -52,7 +52,7 @@
     "Print Invoice for Mailing?": { "type": "boolean", "required": false },
     "Email Invoice?\n(Account Email)": { "type": "boolean", "required": false },
     "Email Invoice?\n(Billing Contacts)": { "type": "boolean", "required": false },
-    "Account Email": { "type": "boolean", "required": false },
+    "Account Email": { "type": "string", "required": false, "format": "email" },
     "Billing Contact": { "type": "string", "required": false, "format": "email" },
     "Billing Contact 2": { "type": "string", "required": false, "format": "email" },
     "Billing Contact 3": { "type": "string", "required": false, "format": "email" }

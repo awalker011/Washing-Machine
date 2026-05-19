@@ -5,6 +5,21 @@
   "sheet_name": "Devices",
   "target_file": "Devices.csv",
   "error_file": "Devices_errors.csv",
+  "field_mappings": {
+    "Device Name": "Device Name*",
+    "Device Number": "Device Number",
+    "Device ID": "Device ID",
+    "Legacy Building ID": "Legacy Building ID",
+    "Building Location": "Building Location",
+    "Derived Building Name": "Derived Building Name",
+    "Account": "Account",
+    "Device Type": "Device Type",
+    "Device Drive": "Device Drive",
+    "Device Application": "Device Application",
+    "Location In Building": "Location In Building",
+    "Location Mechanical Room": "Location Mechanical Room",
+    "Manufacturer": "Manufacturer"
+  },
   "transformations": {
     "Device Name*": ["trim", "collapse_whitespace"],
     "Device Number": ["trim", "collapse_whitespace"],

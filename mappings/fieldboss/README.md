@@ -15,9 +15,3 @@ Validated cross-sheet matches currently inferred from the orange-highlighted ref
 - `Building Locations` contact reference columns -> `Contacts`.`Full Name (Auto)`
 - `Devices`.`Building Location` -> `Building Locations`.`Name*`
 - `Devices`.`Account` -> `Accounts`.`Account Name*`
-
-Run with:
-
-```bash
-python standardize.py --input ./input --schema ./schemas/fieldboss --mapping ./mappings/fieldboss --output ./output --logs ./logs
-```
