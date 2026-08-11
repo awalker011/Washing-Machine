@@ -324,6 +324,12 @@ def apply_operation(
     if name == "uppercase":
         return _as_text(value).upper() if not is_blank(value) else value
 
+    if name == "lowercase_if_email":
+        if is_blank(value):
+            return value
+        text = _as_text(value)
+        return text.lower() if "@" in text else value
+
     if name == "null_if_blank":
         return None if is_blank(value) else value
 

@@ -58,6 +58,20 @@ def test_cross_field_rules_require_complete_address_and_distinct_parent():
     assert ("Address 1: Street 1", "Address is incomplete.") in issues
 
 
+def test_validate_field_email_or_name_accepts_plain_names_but_validates_email_shaped_values():
+    name_issues = validate_field("Billing Contact", "Jane Smith", {"type": "string", "format": "email_or_name"})
+    valid_email_issues = validate_field(
+        "Billing Contact", "jane@example.com", {"type": "string", "format": "email_or_name"}
+    )
+    malformed_email_issues = validate_field(
+        "Billing Contact", "jane@@example.com", {"type": "string", "format": "email_or_name"}
+    )
+
+    assert name_issues == []
+    assert valid_email_issues == []
+    assert any("valid email address" in message for _, message in malformed_email_issues)
+
+
 def test_validate_field_accepts_full_state_name_for_region_code_by_country():
     issues = validate_field(
         "Address 1: State/Province",

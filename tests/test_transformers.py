@@ -41,6 +41,22 @@ def test_apply_transformations_can_map_country_and_build_full_name():
     assert transformed["Country"] == "US"
 
 
+def test_lowercase_if_email_only_affects_email_shaped_values():
+    transformed, issues = apply_transformations(
+        {"Billing Contact": "Jane Smith"},
+        {"Billing Contact": ["lowercase_if_email"]},
+    )
+    assert issues == []
+    assert transformed["Billing Contact"] == "Jane Smith"
+
+    transformed, issues = apply_transformations(
+        {"Billing Contact": "Jane@Example.com"},
+        {"Billing Contact": ["lowercase_if_email"]},
+    )
+    assert issues == []
+    assert transformed["Billing Contact"] == "jane@example.com"
+
+
 def test_apply_transformations_can_realign_shifted_account_address_fields():
     record = {
         "Address 1: City": "",

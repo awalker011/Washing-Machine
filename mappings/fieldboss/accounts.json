@@ -69,9 +69,9 @@
       "uppercase"
     ],
     "Primary Contact": ["trim", "collapse_whitespace"],
-    "Billing Contact": ["trim", "collapse_whitespace"],
-    "Billing Contact 2": ["trim", "collapse_whitespace"],
-    "Billing Contact 3": ["trim", "collapse_whitespace"],
+    "Billing Contact": ["trim", "collapse_whitespace", "lowercase_if_email"],
+    "Billing Contact 2": ["trim", "collapse_whitespace", "lowercase_if_email"],
+    "Billing Contact 3": ["trim", "collapse_whitespace", "lowercase_if_email"],
     "Account Email": ["trim", "lowercase"],
     "Main Phone": [
       {
@@ -80,9 +80,6 @@
       },
       "trim"
     ],
-    "Company Fax": ["trim"],
-    "Billing Contact": ["trim", "lowercase"],
-    "Billing Contact 2": ["trim", "lowercase"],
-    "Billing Contact 3": ["trim", "lowercase"]
+    "Company Fax": ["trim"]
   }
 }

@@ -9,9 +9,12 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 try:
-    from openpyxl import load_workbook
+    from openpyxl import Workbook, load_workbook
+    from openpyxl.styles import Font
 except ImportError:  # pragma: no cover - optional dependency
+    Workbook = None
     load_workbook = None
+    Font = None
 
 from .config_loader import load_named_configs
 from .entity_rules import evaluate_entity_rules
@@ -149,6 +152,7 @@ def process_all(
     entity_rule_issues = evaluate_entity_rules(staged_entities)
     entity_summaries: list[dict[str, Any]] = []
     duplicate_log_rows: list[dict[str, Any]] = []
+    corrections_by_entity: dict[str, list[dict[str, Any]]] = {}
 
     for validation_index, (entity_name, entity_state) in enumerate(staged_entities.items(), start=1):
         _emit_progress(
@@ -224,12 +228,23 @@ def process_all(
             for error in errors
             if error.get("severity", "blocker") == "blocker"
         }
-        rejected = len(rejected_keys | duplicate_exclusions)
+        rejected_row_keys = rejected_keys | duplicate_exclusions
+        rejected = len(rejected_row_keys)
         duplicate_rows_flagged = len(
             {(row["source_file"], row["row_number"]) for row in entity_duplicate_logs}
         )
         total_rows_accepted += accepted
         total_rows_rejected += rejected
+
+        if rejected_row_keys:
+            entity_corrections = _collect_corrections_rows(
+                staged_rows=entity_state.get("all_rows", entity_state["rows"]),
+                errors=errors,
+                entity_duplicate_logs=entity_duplicate_logs,
+                rejected_row_keys=rejected_row_keys,
+            )
+            if entity_corrections:
+                corrections_by_entity[entity_name] = entity_corrections
 
         entity_summaries.append(
             {
@@ -250,6 +265,12 @@ def process_all(
     customer_summary_path = output_root / "customer_summary.txt"
     customer_summary_path.write_text(customer_summary, encoding="utf-8")
 
+    corrections_file_path: str | None = None
+    if corrections_by_entity:
+        corrections_workbook_path = output_root / "Needs_Correction.xlsx"
+        _write_corrections_workbook(corrections_workbook_path, corrections_by_entity)
+        corrections_file_path = str(corrections_workbook_path)
+
     _emit_progress(
         progress_callback,
         phase="complete",
@@ -263,6 +284,7 @@ def process_all(
         "entities": entity_summaries,
         "duplicate_log_file": str(logs_root / "duplicate_log.csv"),
         "customer_summary_file": str(customer_summary_path),
+        "corrections_file": corrections_file_path,
         "totals": {
             "rows_read": total_rows_read,
             "rows_accepted": total_rows_accepted,
@@ -541,21 +563,31 @@ def _iter_input_rows(file_path: Path, sheet_name: str | int | None):
     raise ValueError(f"Unsupported input file type: {file_path}")
 
 
+def _clean_header_label(value: Any) -> str:
+    """Tidy whitespace/newlines in a header for display and dict-key use, preserving original casing."""
+    if value is None:
+        return ""
+
+    text = str(value).strip()
+    text = re.sub(r"[\r\n\t]+", " ", text)
+    return re.sub(r" +", " ", text).strip()
+
+
 def _iter_csv_rows(file_path: Path):
     with file_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
             raise ValueError(f"CSV file '{file_path.name}' is empty or missing a header row.")
 
-        reader.fieldnames = [_normalize_header(name) for name in reader.fieldnames]
+        reader.fieldnames = [_clean_header_label(name) for name in reader.fieldnames]
         if not any(reader.fieldnames):
             raise ValueError(f"CSV file '{file_path.name}' does not contain any usable column headers.")
 
         for row_number, row in enumerate(reader, start=2):
             cleaned = {
-                _normalize_header(key): value
+                _clean_header_label(key): value
                 for key, value in row.items()
-                if key is not None and _normalize_header(key)
+                if key is not None and _clean_header_label(key)
             }
             if any(not is_blank(value) for value in cleaned.values()):
                 yield row_number, cleaned
@@ -591,7 +623,7 @@ def _iter_xlsx_rows(file_path: Path, sheet_name: str | int | None):
                 f"Worksheet '{worksheet.title}' in '{file_path.name}' is empty or missing a header row."
             )
 
-        headers = [_normalize_header(value) for value in header_row]
+        headers = [_clean_header_label(value) for value in header_row]
         if not any(headers):
             raise ValueError(
                 f"Worksheet '{worksheet.title}' in '{file_path.name}' does not contain any usable column headers."
@@ -958,6 +990,99 @@ def _extend_rejected_reference_index_for_entity(
             )
 
 
+def _collect_corrections_rows(
+    staged_rows: list[dict[str, Any]],
+    errors: list[dict[str, Any]],
+    entity_duplicate_logs: list[dict[str, Any]],
+    rejected_row_keys: set[tuple[str, int]],
+) -> list[dict[str, Any]]:
+    reasons_by_row: dict[tuple[str, int], list[str]] = defaultdict(list)
+
+    for error in errors:
+        if error.get("severity", "blocker") != "blocker":
+            continue
+        row_key = _normalize_row_key(error.get("source_file", ""), error.get("row_number"))
+        if row_key is None:
+            continue
+        field_name = str(error.get("field", "")).strip()
+        reason = str(error.get("reason", "")).strip()
+        if field_name and reason:
+            reasons_by_row[row_key].append(f"{field_name}: {reason}")
+
+    for duplicate_row in entity_duplicate_logs:
+        if duplicate_row.get("action") != "excluded_from_output":
+            continue
+        row_key = _normalize_row_key(duplicate_row.get("source_file", ""), duplicate_row.get("row_number"))
+        if row_key is None:
+            continue
+        rule_name = str(duplicate_row.get("rule_name", "")).strip()
+        reason = str(duplicate_row.get("reason", "")).strip()
+        label = f"Duplicate ({rule_name}): {reason}" if rule_name else f"Duplicate: {reason}"
+        reasons_by_row[row_key].append(label)
+
+    corrections_rows: list[dict[str, Any]] = []
+    for row in staged_rows:
+        row_key = (row["source_file"], row["row_number"])
+        if row_key not in rejected_row_keys:
+            continue
+
+        corrections_rows.append(
+            {
+                "raw_row": row["raw_row"],
+                "source_file": row["source_file"],
+                "row_number": row["row_number"],
+                "issues": list(dict.fromkeys(reasons_by_row.get(row_key, []))),
+            }
+        )
+
+    return corrections_rows
+
+
+def _safe_sheet_title(name: str) -> str:
+    sanitized = re.sub(r"[:\\/?*\[\]]", " ", name).strip()
+    sanitized = re.sub(r"\s+", " ", sanitized)
+    return (sanitized or "Sheet")[:31]
+
+
+def _write_corrections_workbook(file_path: Path, corrections_by_entity: dict[str, list[dict[str, Any]]]) -> None:
+    if Workbook is None:
+        raise RuntimeError("XLSX support requires openpyxl to be installed.")
+
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+
+    for entity_name, rows in corrections_by_entity.items():
+        headers: list[str] = []
+        seen_headers: set[str] = set()
+        for row in rows:
+            for header in row["raw_row"].keys():
+                if header not in seen_headers:
+                    seen_headers.add(header)
+                    headers.append(header)
+
+        full_headers = [*headers, "Source File", "Row Number", "Issues Found"]
+        worksheet = workbook.create_sheet(title=_safe_sheet_title(entity_name))
+        worksheet.append(full_headers)
+        for cell in worksheet[1]:
+            cell.font = Font(bold=True)
+        worksheet.freeze_panes = "A2"
+
+        for row in rows:
+            raw_row = row["raw_row"]
+            values = [raw_row.get(header) for header in headers]
+            values.append(row["source_file"])
+            values.append(row["row_number"])
+            values.append("; ".join(row["issues"]) if row["issues"] else "")
+            worksheet.append(values)
+
+        for column_cells in worksheet.columns:
+            longest = max((len(str(cell.value)) for cell in column_cells if cell.value is not None), default=0)
+            worksheet.column_dimensions[column_cells[0].column_letter].width = min(60, max(10, longest + 2))
+
+    workbook.save(file_path)
+
+
 def _build_customer_summary(entity_summaries: list[dict[str, Any]]) -> str:
     total_accepted = sum(int(entity.get("rows_accepted", 0)) for entity in entity_summaries)
     total_rejected = sum(int(entity.get("rows_rejected", 0)) for entity in entity_summaries)
@@ -1032,6 +1157,12 @@ def _classify_error(
 
     if "expected value of type" in reason_lower:
         return "VAL-002", "blocker", "Use a value that matches the expected type for this field."
+
+    if "plain contact name" in reason_lower:
+        return "FMT-EMAIL", "warning", "Enter a valid email format (name@example.com), or leave as plain text if this is a contact name rather than an email."
+
+    if field_lower == "account email" and "valid email" in reason_lower:
+        return "FMT-EMAIL", "blocker", "Enter a valid email address (name@example.com) for Account Email before this row can be accepted."
 
     if "valid email" in reason_lower or "email" in field_lower:
         return "FMT-EMAIL", "warning", "Enter a valid email format (name@example.com) or leave blank if optional."
