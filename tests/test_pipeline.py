@@ -2,7 +2,7 @@ import csv
 import json
 
 import pytest
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from data_standardizer.pipeline import process_all
 
@@ -77,6 +77,204 @@ def test_duplicate_log_includes_rows_that_are_invalid_for_other_reasons(tmp_path
 
     assert len(rows) == 2
     assert {row["row_number"] for row in rows} == {"2", "3"}
+
+
+def test_process_all_writes_corrections_workbook_with_only_rejected_rows(tmp_path):
+    input_dir = tmp_path / "input"
+    schema_dir = tmp_path / "schemas"
+    mapping_dir = tmp_path / "mappings"
+    output_dir = tmp_path / "output"
+    logs_dir = tmp_path / "logs"
+
+    input_dir.mkdir()
+    schema_dir.mkdir()
+    mapping_dir.mkdir()
+
+    (input_dir / "accounts.csv").write_text(
+        "Account Name*,Account Type\n"
+        "Acme Corp,Retail\n"
+        ",???\n",
+        encoding="utf-8",
+    )
+
+    (schema_dir / "accounts.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Accounts",
+                "output_columns": ["Account Name*", "Account Type"],
+                "fields": {
+                    "Account Name*": {"type": "string", "required": True},
+                    "Account Type": {"type": "string", "disallow_values": ["???"]},
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    (mapping_dir / "accounts.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Accounts",
+                "schema": "Accounts",
+                "source_patterns": ["accounts.csv"],
+                "target_file": "Accounts.csv",
+                "error_file": "Accounts_errors.csv",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    result = process_all(
+        input_path=str(input_dir),
+        schema_path=str(schema_dir),
+        mapping_path=str(mapping_dir),
+        output_dir=str(output_dir),
+        logs_dir=str(logs_dir),
+    )
+
+    corrections_path = output_dir / "Needs_Correction.xlsx"
+    assert result["corrections_file"] == str(corrections_path)
+    assert corrections_path.exists()
+
+    workbook = load_workbook(corrections_path)
+    assert workbook.sheetnames == ["Accounts"]
+
+    worksheet = workbook["Accounts"]
+    rows = list(worksheet.iter_rows(values_only=True))
+    assert rows[0] == ("Account Name*", "Account Type", "Source File", "Row Number", "Issues Found")
+    assert len(rows) == 2
+
+    data_row = rows[1]
+    assert data_row[0] in (None, "")
+    assert data_row[1] == "???"
+    assert data_row[2] == "accounts.csv"
+    assert data_row[3] == 3
+    assert "Field is required" in data_row[4]
+
+
+def test_process_all_rejects_rows_with_malformed_account_email(tmp_path):
+    input_dir = tmp_path / "input"
+    schema_dir = tmp_path / "schemas"
+    mapping_dir = tmp_path / "mappings"
+    output_dir = tmp_path / "output"
+    logs_dir = tmp_path / "logs"
+
+    input_dir.mkdir()
+    schema_dir.mkdir()
+    mapping_dir.mkdir()
+
+    (input_dir / "accounts.csv").write_text(
+        "Account Name*,Account Email\n"
+        "Acme Corp,jane@example.com\n"
+        "Other Corp,not-an-email\n",
+        encoding="utf-8",
+    )
+
+    (schema_dir / "accounts.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Accounts",
+                "output_columns": ["Account Name*", "Account Email"],
+                "fields": {
+                    "Account Name*": {"type": "string", "required": True},
+                    "Account Email": {"type": "string", "required": False, "format": "email"},
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    (mapping_dir / "accounts.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Accounts",
+                "schema": "Accounts",
+                "source_patterns": ["accounts.csv"],
+                "target_file": "Accounts.csv",
+                "error_file": "Accounts_errors.csv",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    result = process_all(
+        input_path=str(input_dir),
+        schema_path=str(schema_dir),
+        mapping_path=str(mapping_dir),
+        output_dir=str(output_dir),
+        logs_dir=str(logs_dir),
+    )
+
+    assert result["totals"] == {"rows_read": 2, "rows_accepted": 1, "rows_rejected": 1}
+    assert result["corrections_file"] is not None
+
+    with (output_dir / "Accounts.csv").open("r", encoding="utf-8", newline="") as handle:
+        output_rows = list(csv.DictReader(handle))
+    assert [row["Account Name*"] for row in output_rows] == ["Acme Corp"]
+
+    with (output_dir / "Accounts_errors.csv").open("r", encoding="utf-8", newline="") as handle:
+        error_rows = list(csv.DictReader(handle))
+    assert len(error_rows) == 1
+    assert error_rows[0]["field"] == "Account Email"
+    assert error_rows[0]["severity"] == "blocker"
+
+
+def test_process_all_omits_corrections_workbook_when_nothing_is_rejected(tmp_path):
+    input_dir = tmp_path / "input"
+    schema_dir = tmp_path / "schemas"
+    mapping_dir = tmp_path / "mappings"
+    output_dir = tmp_path / "output"
+    logs_dir = tmp_path / "logs"
+
+    input_dir.mkdir()
+    schema_dir.mkdir()
+    mapping_dir.mkdir()
+
+    (input_dir / "accounts.csv").write_text(
+        "Account Name*\nAcme Corp\n",
+        encoding="utf-8",
+    )
+
+    (schema_dir / "accounts.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Accounts",
+                "output_columns": ["Account Name*"],
+                "fields": {"Account Name*": {"type": "string", "required": True}},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    (mapping_dir / "accounts.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Accounts",
+                "schema": "Accounts",
+                "source_patterns": ["accounts.csv"],
+                "target_file": "Accounts.csv",
+                "error_file": "Accounts_errors.csv",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    result = process_all(
+        input_path=str(input_dir),
+        schema_path=str(schema_dir),
+        mapping_path=str(mapping_dir),
+        output_dir=str(output_dir),
+        logs_dir=str(logs_dir),
+    )
+
+    assert result["corrections_file"] is None
+    assert not (output_dir / "Needs_Correction.xlsx").exists()
 
 
 def test_process_all_raises_when_no_input_files_match(tmp_path):

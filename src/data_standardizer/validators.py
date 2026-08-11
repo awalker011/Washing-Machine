@@ -87,6 +87,11 @@ def _matches_format(
     if format_name == "email":
         return EMAIL_PATTERN.fullmatch(text) is not None
 
+    if format_name == "email_or_name":
+        if "@" not in text:
+            return True
+        return EMAIL_PATTERN.fullmatch(text) is not None
+
     if format_name == "phone":
         digits = re.sub(r"\D+", "", text)
         return 10 <= len(digits) <= 15
@@ -111,6 +116,8 @@ def _format_message(field_name: str, field_config: dict) -> str:
     format_name = str(field_config.get("format", "")).strip()
     if format_name == "email":
         return f"{field_name} must contain a valid email address."
+    if format_name == "email_or_name":
+        return f"{field_name} looks like an email address but is not valid. Enter a valid email address, or a plain contact name if this isn't meant to be an email."
     if format_name == "phone":
         return f"{field_name} must contain a valid phone number with at least 10 digits."
     if format_name == "postal_code_us_ca":

@@ -88,6 +88,10 @@ def format_run_summary(result: dict[str, Any]) -> str:
     if customer_summary:
         lines.append(f"Customer summary: {customer_summary}")
 
+    corrections_file = result.get("corrections_file")
+    if corrections_file:
+        lines.append(f"Rows needing correction (send back for re-run): {corrections_file}")
+
     return "\n".join(lines)
 
 
