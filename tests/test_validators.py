@@ -130,3 +130,38 @@ def test_relationship_rules_offer_similar_values_and_use_normalized_lookup():
     )
 
     assert related_issues == []
+
+
+def test_relationship_rules_explain_when_reference_exists_but_was_rejected():
+    rules = [
+        {
+            "type": "must_exist_in_entity",
+            "field": "Account",
+            "other_entity": "Accounts",
+            "other_field": "Account Name*",
+            "message": "Account must exist.",
+        }
+    ]
+
+    issues = validate_relationship_rules(
+        {"Account": "QUALITY PROGRESSIONS"},
+        rules,
+        {("Accounts", "Account Name*"): set()},
+        {("Accounts", "Account Name*"): {}},
+        {
+            ("Accounts", "Account Name*"): {
+                "QUALITY PROGRESSIONS": [
+                    {
+                        "source_file": "Core Records - TAM.xlsx",
+                        "row_number": 1599,
+                        "reasons": ["Account Email: Account Email must contain a valid email address."],
+                    }
+                ]
+            }
+        },
+    )
+
+    assert len(issues) == 1
+    assert "Lookup dependency note" in issues[0][1]
+    assert "Core Records - TAM.xlsx:1599" in issues[0][1]
+    assert "Account Email" in issues[0][1]

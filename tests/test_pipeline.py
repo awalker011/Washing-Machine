@@ -258,3 +258,288 @@ def test_process_all_normalizes_state_header_variants(tmp_path):
         rows = list(csv.DictReader(handle))
 
     assert rows == []
+
+
+def test_process_all_enriches_building_customer_without_legacy_id(tmp_path):
+    input_dir = tmp_path / "input"
+    schema_dir = tmp_path / "schemas"
+    mapping_dir = tmp_path / "mappings"
+    output_dir = tmp_path / "output"
+    logs_dir = tmp_path / "logs"
+
+    input_dir.mkdir()
+    schema_dir.mkdir()
+    mapping_dir.mkdir()
+
+    (input_dir / "accounts.csv").write_text(
+        "Account Name*,Legacy Customer #\n"
+        "Acme Co:123 Main St,QB-1\n",
+        encoding="utf-8",
+    )
+
+    (input_dir / "building_locations.csv").write_text(
+        "Name,Customer\n"
+        "123 Main St,Acme.Co\n",
+        encoding="utf-8",
+    )
+
+    (schema_dir / "accounts.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Accounts",
+                "output_columns": ["Account Name*", "Legacy Customer #"],
+                "fields": {
+                    "Account Name*": {"type": "string", "required": True},
+                    "Legacy Customer #": {"type": "string", "required": False},
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    (schema_dir / "building_locations.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Building Locations",
+                "output_columns": ["Name*", "Customer (Account - for Invoicing)"],
+                "fields": {
+                    "Name*": {"type": "string", "required": True},
+                    "Customer (Account - for Invoicing)": {"type": "string", "required": False},
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    (mapping_dir / "accounts.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Accounts",
+                "schema": "Accounts",
+                "source_patterns": ["accounts.csv"],
+                "target_file": "Accounts.csv",
+                "error_file": "Accounts_errors.csv",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    (mapping_dir / "building_locations.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Building Locations",
+                "schema": "Building Locations",
+                "source_patterns": ["building_locations.csv"],
+                "target_file": "Building Locations.csv",
+                "error_file": "Building Locations_errors.csv",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    process_all(
+        input_path=str(input_dir),
+        schema_path=str(schema_dir),
+        mapping_path=str(mapping_dir),
+        output_dir=str(output_dir),
+        logs_dir=str(logs_dir),
+    )
+
+    with (output_dir / "Building Locations.csv").open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert len(rows) == 1
+    assert rows[0]["Customer (Account - for Invoicing)"] == "Acme Co:123 Main St"
+
+
+def test_process_all_logs_building_customer_source_gap(tmp_path):
+    input_dir = tmp_path / "input"
+    schema_dir = tmp_path / "schemas"
+    mapping_dir = tmp_path / "mappings"
+    output_dir = tmp_path / "output"
+    logs_dir = tmp_path / "logs"
+
+    input_dir.mkdir()
+    schema_dir.mkdir()
+    mapping_dir.mkdir()
+
+    (input_dir / "accounts.csv").write_text(
+        "Account Name*\n"
+        "Acme Co\n",
+        encoding="utf-8",
+    )
+
+    (input_dir / "building_locations.csv").write_text(
+        "Name\n"
+        "123 Main St\n",
+        encoding="utf-8",
+    )
+
+    (schema_dir / "accounts.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Accounts",
+                "output_columns": ["Account Name*"],
+                "fields": {"Account Name*": {"type": "string", "required": True}},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    (schema_dir / "building_locations.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Building Locations",
+                "output_columns": ["Name*", "Customer (Account - for Invoicing)"],
+                "fields": {
+                    "Name*": {"type": "string", "required": True},
+                    "Customer (Account - for Invoicing)": {"type": "string", "required": False},
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    (mapping_dir / "accounts.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Accounts",
+                "schema": "Accounts",
+                "source_patterns": ["accounts.csv"],
+                "target_file": "Accounts.csv",
+                "error_file": "Accounts_errors.csv",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    (mapping_dir / "building_locations.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Building Locations",
+                "schema": "Building Locations",
+                "source_patterns": ["building_locations.csv"],
+                "target_file": "Building Locations.csv",
+                "error_file": "Building Locations_errors.csv",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    process_all(
+        input_path=str(input_dir),
+        schema_path=str(schema_dir),
+        mapping_path=str(mapping_dir),
+        output_dir=str(output_dir),
+        logs_dir=str(logs_dir),
+    )
+
+    with (output_dir / "Building Locations_errors.csv").open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert len(rows) == 1
+    assert rows[0]["field"] == "Customer (Account - for Invoicing)"
+    assert "source gap" in rows[0]["reason"]
+
+
+def test_process_all_logs_building_customer_non_unique_match(tmp_path):
+    input_dir = tmp_path / "input"
+    schema_dir = tmp_path / "schemas"
+    mapping_dir = tmp_path / "mappings"
+    output_dir = tmp_path / "output"
+    logs_dir = tmp_path / "logs"
+
+    input_dir.mkdir()
+    schema_dir.mkdir()
+    mapping_dir.mkdir()
+
+    (input_dir / "accounts.csv").write_text(
+        "Account Name*\n"
+        "Acme Co\n"
+        "ACME-CO\n",
+        encoding="utf-8",
+    )
+
+    (input_dir / "building_locations.csv").write_text(
+        "Name,Customer\n"
+        "123 Main St,Acme.Co\n",
+        encoding="utf-8",
+    )
+
+    (schema_dir / "accounts.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Accounts",
+                "output_columns": ["Account Name*"],
+                "fields": {"Account Name*": {"type": "string", "required": True}},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    (schema_dir / "building_locations.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Building Locations",
+                "output_columns": ["Name*", "Customer (Account - for Invoicing)"],
+                "fields": {
+                    "Name*": {"type": "string", "required": True},
+                    "Customer (Account - for Invoicing)": {"type": "string", "required": False},
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    (mapping_dir / "accounts.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Accounts",
+                "schema": "Accounts",
+                "source_patterns": ["accounts.csv"],
+                "target_file": "Accounts.csv",
+                "error_file": "Accounts_errors.csv",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    (mapping_dir / "building_locations.json").write_text(
+        json.dumps(
+            {
+                "entity_name": "Building Locations",
+                "schema": "Building Locations",
+                "source_patterns": ["building_locations.csv"],
+                "target_file": "Building Locations.csv",
+                "error_file": "Building Locations_errors.csv",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    process_all(
+        input_path=str(input_dir),
+        schema_path=str(schema_dir),
+        mapping_path=str(mapping_dir),
+        output_dir=str(output_dir),
+        logs_dir=str(logs_dir),
+    )
+
+    with (output_dir / "Building Locations_errors.csv").open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert len(rows) == 1
+    assert rows[0]["field"] == "Customer (Account - for Invoicing)"
+    assert "non-unique Customer name" in rows[0]["reason"]

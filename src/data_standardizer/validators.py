@@ -248,9 +248,11 @@ def validate_relationship_rules(
     rules: list[dict],
     relationship_index: dict[tuple[str, str], set[str]],
     entity_row_index: dict[tuple[str, str], dict[str, list[dict[str, Any]]]] | None = None,
+    rejected_reference_index: dict[tuple[str, str], dict[str, list[dict[str, Any]]]] | None = None,
 ) -> list[tuple[str, str]]:
     issues: list[tuple[str, str]] = []
     entity_row_index = entity_row_index or {}
+    rejected_reference_index = rejected_reference_index or {}
 
     for rule in rules or []:
         rule_type = str(rule.get("type", "must_exist_in_entity"))
@@ -271,13 +273,22 @@ def validate_relationship_rules(
             allowed_values = relationship_index.get((str(other_entity), str(other_field)), set())
             if value not in allowed_values:
                 candidate_map = entity_row_index.get((str(other_entity), str(other_field)), {})
-                similar_values = _find_similar_values(value, list(candidate_map.keys()))
-                if similar_values:
-                    issues.append(
-                        (str(field_name), f"{message} Similar existing value(s): {', '.join(similar_values)}.")
-                    )
+                rejected_candidate_map = rejected_reference_index.get(
+                    (str(other_entity), str(other_field)),
+                    {},
+                )
+                rejected_matches = _get_related_rows(rejected_candidate_map, value)
+                if rejected_matches:
+                    details = _summarize_rejected_reference(str(other_entity), rejected_matches)
+                    issues.append((str(field_name), f"{message} {details}"))
                 else:
-                    issues.append((str(field_name), str(message)))
+                    similar_values = _find_similar_values(value, list(candidate_map.keys()))
+                    if similar_values:
+                        issues.append(
+                            (str(field_name), f"{message} Similar existing value(s): {', '.join(similar_values)}.")
+                        )
+                    else:
+                        issues.append((str(field_name), str(message)))
 
         elif rule_type == "related_field_equals":
             field_name = str(rule.get("field", "")).strip()
@@ -312,6 +323,24 @@ def validate_relationship_rules(
                 issues.append((field_name, f"{message} Expected: {expected_text}."))
 
     return issues
+
+
+def _summarize_rejected_reference(other_entity: str, rejected_matches: list[dict[str, Any]]) -> str:
+    first_match = rejected_matches[0]
+    source_file = str(first_match.get("source_file", "")).strip()
+    row_number = first_match.get("row_number")
+    reasons = [str(reason) for reason in first_match.get("reasons", []) if str(reason).strip()]
+    reason_text = reasons[0] if reasons else "record failed validation"
+
+    if source_file and row_number is not None:
+        row_ref = f"{source_file}:{row_number}"
+    else:
+        row_ref = "upstream row"
+
+    return (
+        "Lookup dependency note: this value exists in source data but the referenced "
+        f"{other_entity} row was rejected earlier (example {row_ref}: {reason_text})."
+    )
 
 
 def validate_record(record: dict[str, Any], schema: dict) -> list[tuple[str, str]]:

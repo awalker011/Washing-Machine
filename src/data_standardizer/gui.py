@@ -84,6 +84,10 @@ def format_run_summary(result: dict[str, Any]) -> str:
     if duplicate_log:
         lines.extend(["", f"Duplicate log: {duplicate_log}"])
 
+    customer_summary = result.get("customer_summary_file")
+    if customer_summary:
+        lines.append(f"Customer summary: {customer_summary}")
+
     return "\n".join(lines)
 
 
@@ -98,6 +102,7 @@ class WashingMachineApp:
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar()
         self.status_var = tk.StringVar(value="Load a workbook and start the wash cycle.")
+        self.progress_text_var = tk.StringVar(value="Progress: idle")
         self.last_output_dir: Path | None = None
 
         self._configure_styles()
@@ -165,6 +170,12 @@ class WashingMachineApp:
 
         self.open_button = ttk.Button(button_row, text="📂 Open Output Folder", command=self.open_output_folder)
         self.open_button.pack(side="left", padx=(8, 0))
+
+        progress_row = ttk.Frame(outer, style="App.TFrame")
+        progress_row.pack(fill="x", pady=(2, 8))
+        self.progress_bar = ttk.Progressbar(progress_row, mode="determinate", maximum=100)
+        self.progress_bar.pack(side="left", fill="x", expand=True)
+        ttk.Label(progress_row, textvariable=self.progress_text_var, style="Subtitle.TLabel").pack(side="left", padx=(8, 0))
 
         ttk.Label(outer, textvariable=self.status_var, style="Status.TLabel").pack(anchor="w", pady=(0, 8))
 
@@ -237,6 +248,8 @@ class WashingMachineApp:
 
         self.run_button.configure(state="disabled")
         self.status_var.set("Wash cycle running…")
+        self.progress_bar.configure(maximum=100, value=0)
+        self.progress_text_var.set("Progress: 0%")
         self.append_output(f"Starting wash cycle for: {input_file.name}")
 
         worker = threading.Thread(
@@ -254,6 +267,9 @@ class WashingMachineApp:
         schema_dir: Path,
         mapping_dir: Path,
     ) -> None:
+        def publish_progress(event: dict[str, Any]) -> None:
+            self.root.after(0, lambda payload=event: self._handle_progress_event(payload))
+
         try:
             output_root.mkdir(parents=True, exist_ok=True)
             logs_root.mkdir(parents=True, exist_ok=True)
@@ -263,6 +279,7 @@ class WashingMachineApp:
                 mapping_path=str(mapping_dir),
                 output_dir=str(output_root),
                 logs_dir=str(logs_root),
+                progress_callback=publish_progress,
             )
         except Exception as exc:
             detail = "\n".join(traceback.format_exception_only(type(exc), exc)).strip()
@@ -275,6 +292,8 @@ class WashingMachineApp:
         self.last_output_dir = output_root
         self.run_button.configure(state="normal")
         self.status_var.set("Spin cycle finished successfully.")
+        self.progress_bar.configure(value=self.progress_bar.cget("maximum"))
+        self.progress_text_var.set("Progress: 100%")
         self.append_output(format_run_summary(result))
         self.append_output("")
         self.append_output(json.dumps(result, indent=2, ensure_ascii=False))
@@ -282,8 +301,22 @@ class WashingMachineApp:
     def _handle_failure(self, detail: str) -> None:
         self.run_button.configure(state="normal")
         self.status_var.set("Wash cycle stopped.")
+        self.progress_text_var.set("Progress: stopped")
         self.append_output(f"Run failed: {detail}")
         messagebox.showerror("Washing Machine", detail)
+
+    def _handle_progress_event(self, event: dict[str, Any]) -> None:
+        current = int(event.get("current", 0) or 0)
+        total = int(event.get("total", 1) or 1)
+        if total < 1:
+            total = 1
+        current = max(0, min(current, total))
+
+        self.progress_bar.configure(maximum=total, value=current)
+        percent = int((current / total) * 100)
+        message = str(event.get("message", "Running..."))
+        self.status_var.set(message)
+        self.progress_text_var.set(f"Progress: {percent}%")
 
     def open_output_folder(self) -> None:
         candidate = self.last_output_dir

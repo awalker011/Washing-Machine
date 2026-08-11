@@ -6,7 +6,7 @@ import re
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 try:
     from openpyxl import load_workbook
@@ -24,6 +24,12 @@ ERROR_LOG_FIELDS = [
     "source_file",
     "row_number",
     "field",
+    "severity",
+    "dependency_type",
+    "depends_on_entity",
+    "depends_on_source_file",
+    "depends_on_row_number",
+    "suggested_fix",
     "reason",
     "original_value",
     "raw_row",
@@ -54,6 +60,8 @@ DUPLICATE_LOG_FIELDS = [
     "raw_row",
 ]
 
+ProgressCallback = Callable[[dict[str, Any]], None]
+
 
 def process_all(
     input_path: str,
@@ -61,6 +69,7 @@ def process_all(
     mapping_path: str,
     output_dir: str,
     logs_dir: str,
+    progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     input_root = Path(input_path)
     output_root = Path(output_dir)
@@ -81,8 +90,25 @@ def process_all(
     total_rows_read = 0
     total_rows_accepted = 0
     total_rows_rejected = 0
+    entity_count = len(mappings)
 
-    for entity_name, mapping in mappings.items():
+    _emit_progress(
+        progress_callback,
+        phase="starting",
+        message="Loading mappings and preparing run.",
+        current=0,
+        total=max(1, entity_count * 2 + 3),
+    )
+
+    for stage_index, (entity_name, mapping) in enumerate(mappings.items(), start=1):
+        _emit_progress(
+            progress_callback,
+            phase="staging",
+            message=f"Staging {entity_name}...",
+            entity=entity_name,
+            current=stage_index,
+            total=max(1, entity_count * 2 + 3),
+        )
         schema = _resolve_schema(entity_name, mapping, schemas)
         staged_rows, all_rows, entity_errors, processed_files, read_count = _stage_entity(
             input_root=input_root,
@@ -109,11 +135,30 @@ def process_all(
             "rows_read": read_count,
         }
 
+    rejected_reference_index = _build_rejected_reference_index(staged_entities)
+
+    _emit_progress(
+        progress_callback,
+        phase="enrichment",
+        message="Applying cross-sheet enrichment.",
+        current=entity_count + 1,
+        total=max(1, entity_count * 2 + 3),
+    )
+    _enrich_cross_sheet_links(staged_entities)
+
     entity_rule_issues = evaluate_entity_rules(staged_entities)
     entity_summaries: list[dict[str, Any]] = []
     duplicate_log_rows: list[dict[str, Any]] = []
 
-    for entity_name, entity_state in staged_entities.items():
+    for validation_index, (entity_name, entity_state) in enumerate(staged_entities.items(), start=1):
+        _emit_progress(
+            progress_callback,
+            phase="validating",
+            message=f"Validating {entity_name}...",
+            entity=entity_name,
+            current=entity_count + 1 + validation_index,
+            total=max(1, entity_count * 2 + 3),
+        )
         schema = entity_state["schema"]
         mapping = entity_state["mapping"]
         final_rows: list[dict[str, Any]] = []
@@ -134,16 +179,18 @@ def process_all(
             row_issues = list(
                 entity_rule_issues.get((entity_name, staged_row["source_file"], staged_row["row_number"]), [])
             )
+            row_issues.extend(staged_row.get("enrichment_issues", []))
             row_issues.extend(
                 validate_relationship_rules(
                     staged_row["data"],
                     schema.get("relationship_rules", []),
                     relationship_index,
                     entity_row_index,
+                    rejected_reference_index,
                 )
             )
             if row_issues:
-                _append_row_issues(
+                has_blocker = _append_row_issues(
                     errors=errors,
                     entity_name=entity_name,
                     source_file=staged_row["source_file"],
@@ -152,6 +199,8 @@ def process_all(
                     record=staged_row["data"],
                     raw_row=staged_row["raw_row"],
                 )
+                if not has_blocker:
+                    final_rows.append(staged_row["data"])
             else:
                 final_rows.append(staged_row["data"])
 
@@ -162,8 +211,19 @@ def process_all(
         _write_csv(output_root / target_file, final_rows, output_columns)
         _write_csv(output_root / error_file, errors, ERROR_LOG_FIELDS)
 
+        _extend_rejected_reference_index_for_entity(
+            rejected_reference_index,
+            entity_name=entity_name,
+            staged_rows=entity_state.get("all_rows", entity_state["rows"]),
+            errors=errors,
+        )
+
         accepted = len(final_rows)
-        rejected_keys = {(error["source_file"], error["row_number"]) for error in errors}
+        rejected_keys = {
+            (error["source_file"], error["row_number"])
+            for error in errors
+            if error.get("severity", "blocker") == "blocker"
+        }
         rejected = len(rejected_keys | duplicate_exclusions)
         duplicate_rows_flagged = len(
             {(row["source_file"], row["row_number"]) for row in entity_duplicate_logs}
@@ -186,17 +246,195 @@ def process_all(
 
     _append_run_log(logs_root / "run_log.csv", entity_summaries)
     _append_duplicate_log(logs_root / "duplicate_log.csv", duplicate_log_rows)
+    customer_summary = _build_customer_summary(entity_summaries)
+    customer_summary_path = output_root / "customer_summary.txt"
+    customer_summary_path.write_text(customer_summary, encoding="utf-8")
+
+    _emit_progress(
+        progress_callback,
+        phase="complete",
+        message="Run complete.",
+        current=max(1, entity_count * 2 + 3),
+        total=max(1, entity_count * 2 + 3),
+    )
 
     return {
         "status": "completed",
         "entities": entity_summaries,
         "duplicate_log_file": str(logs_root / "duplicate_log.csv"),
+        "customer_summary_file": str(customer_summary_path),
         "totals": {
             "rows_read": total_rows_read,
             "rows_accepted": total_rows_accepted,
             "rows_rejected": total_rows_rejected,
         },
     }
+
+
+def _enrich_cross_sheet_links(staged_entities: dict[str, dict[str, Any]]) -> None:
+    """Apply best-effort cross-sheet link enrichment to reduce dropped relationship data."""
+    _enrich_building_customer_from_accounts(staged_entities)
+
+
+def _enrich_building_customer_from_accounts(staged_entities: dict[str, dict[str, Any]]) -> None:
+    accounts_state = staged_entities.get("Accounts")
+    buildings_state = staged_entities.get("Building Locations")
+    if not accounts_state or not buildings_state:
+        return
+
+    accounts_rows = accounts_state.get("rows", [])
+    building_rows = buildings_state.get("rows", [])
+    if not accounts_rows or not building_rows:
+        return
+
+    legacy_to_account: dict[str, str] = {}
+    exact_name_to_account: dict[str, str] = {}
+    normalized_name_to_accounts: dict[str, set[str]] = defaultdict(set)
+
+    for row in accounts_rows:
+        data = row.get("data", {})
+        account_name = comparable(data.get("Account Name*"))
+        if account_name is None:
+            continue
+
+        legacy_id = comparable(data.get("Legacy Customer #"))
+        if legacy_id is not None:
+            legacy_to_account[legacy_id.casefold()] = account_name
+
+        exact_name_to_account[account_name.casefold()] = account_name
+        normalized_name = normalize_loose_text(account_name)
+        if normalized_name:
+            normalized_name_to_accounts[normalized_name].add(account_name)
+
+    for row in building_rows:
+        data = row.get("data", {})
+        raw_row = row.get("raw_row", {})
+
+        current_customer = comparable(data.get("Customer (Account - for Invoicing)"))
+        if current_customer is not None and current_customer.casefold() in exact_name_to_account:
+            # Canonicalize existing match to exact account casing.
+            data["Customer (Account - for Invoicing)"] = exact_name_to_account[current_customer.casefold()]
+            continue
+
+        legacy_id = _get_raw_value(raw_row, [
+            "Legacy Account Id",
+            "Legacy Customer #",
+            "Customer Legacy ID",
+            "QB Legacy ID",
+        ])
+        raw_customer = _get_raw_value(raw_row, [
+            "Customer",
+            "Company Name",
+            "Account Name",
+        ])
+        building_name = _get_raw_value(raw_row, ["Name", "Building Name"])
+
+        resolved_account: str | None = None
+        ambiguous_customer_matches: set[str] = set()
+        ambiguous_composite_matches: set[str] = set()
+
+        if legacy_id:
+            resolved_account = legacy_to_account.get(legacy_id.casefold())
+
+        if resolved_account is None and raw_customer:
+            resolved_account = exact_name_to_account.get(raw_customer.casefold())
+
+        if resolved_account is None and raw_customer:
+            normalized_customer = normalize_loose_text(raw_customer)
+            customer_matches = normalized_name_to_accounts.get(normalized_customer, set())
+            if len(customer_matches) == 1:
+                resolved_account = next(iter(customer_matches))
+            elif len(customer_matches) > 1:
+                ambiguous_customer_matches = set(customer_matches)
+
+        # Fallback: some sources store account as "<customer>:<building name>".
+        if resolved_account is None and raw_customer and building_name:
+            composite = f"{raw_customer}:{building_name}"
+            composite_match = exact_name_to_account.get(composite.casefold())
+            if composite_match is not None:
+                resolved_account = composite_match
+            else:
+                normalized_composite = normalize_loose_text(composite)
+                composite_matches = normalized_name_to_accounts.get(normalized_composite, set())
+                if len(composite_matches) == 1:
+                    resolved_account = next(iter(composite_matches))
+                elif len(composite_matches) > 1:
+                    ambiguous_composite_matches = set(composite_matches)
+
+        if resolved_account is not None:
+            data["Customer (Account - for Invoicing)"] = resolved_account
+            continue
+
+        field_name = "Customer (Account - for Invoicing)"
+        if legacy_id is None and raw_customer is None:
+            _add_enrichment_issue(
+                row,
+                field_name,
+                "Unable to pair building to an account: source gap (missing Customer and Legacy Account Id).",
+            )
+            continue
+
+        if ambiguous_customer_matches:
+            candidates = ", ".join(sorted(ambiguous_customer_matches)[:5])
+            _add_enrichment_issue(
+                row,
+                field_name,
+                (
+                    "Unable to pair building to an account: non-unique Customer name matched multiple Accounts "
+                    f"({candidates})."
+                ),
+            )
+            continue
+
+        if ambiguous_composite_matches:
+            candidates = ", ".join(sorted(ambiguous_composite_matches)[:5])
+            _add_enrichment_issue(
+                row,
+                field_name,
+                (
+                    "Unable to pair building to an account: non-unique Customer+Building composite matched multiple Accounts "
+                    f"({candidates})."
+                ),
+            )
+            continue
+
+        detail_parts = []
+        if legacy_id is not None:
+            detail_parts.append(f"Legacy Account Id='{legacy_id}'")
+        if raw_customer is not None:
+            detail_parts.append(f"Customer='{raw_customer}'")
+        if building_name is not None:
+            detail_parts.append(f"Building Name='{building_name}'")
+        details = "; ".join(detail_parts) if detail_parts else "no source values"
+        _add_enrichment_issue(
+            row,
+            field_name,
+            f"Unable to pair building to an account: no matching Account found ({details}).",
+        )
+
+
+def _add_enrichment_issue(row: dict[str, Any], field_name: str, reason: str) -> None:
+    issues = row.setdefault("enrichment_issues", [])
+    issues.append((field_name, reason))
+
+
+def _get_raw_value(raw_row: dict[str, Any], candidates: list[str]) -> str | None:
+    if not raw_row:
+        return None
+
+    normalized_lookup = {
+        _normalize_header(key, case_sensitive=False): value
+        for key, value in raw_row.items()
+        if key is not None
+    }
+
+    for candidate in candidates:
+        candidate_key = _normalize_header(candidate, case_sensitive=False)
+        value = normalized_lookup.get(candidate_key)
+        normalized = comparable(value)
+        if normalized is not None:
+            return normalized
+    return None
 
 
 def _resolve_schema(entity_name: str, mapping: dict, schemas: dict[str, dict]) -> dict:
@@ -245,7 +483,7 @@ def _stage_entity(
             all_rows.append(row_state)
 
             if transform_issues:
-                _append_row_issues(
+                has_blocker = _append_row_issues(
                     errors=errors,
                     entity_name=entity_name,
                     source_file=source_file.name,
@@ -254,11 +492,12 @@ def _stage_entity(
                     record=standardized,
                     raw_row=raw_row,
                 )
-                continue
+                if has_blocker:
+                    continue
 
             row_issues = validate_record(transformed, schema)
             if row_issues:
-                _append_row_issues(
+                has_blocker = _append_row_issues(
                     errors=errors,
                     entity_name=entity_name,
                     source_file=source_file.name,
@@ -267,7 +506,8 @@ def _stage_entity(
                     record=transformed,
                     raw_row=raw_row,
                 )
-                continue
+                if has_blocker:
+                    continue
 
             staged_rows.append(row_state)
 
@@ -379,12 +619,22 @@ def _map_row(raw_row: dict[str, Any], mapping: dict, schema: dict) -> dict[str, 
     # Build case-insensitive lookup for raw_row
     raw_row_lookup = _build_header_lookup(list(raw_row.keys()), case_sensitive=False)
 
-    # Apply explicit field mappings
+    # Apply explicit field mappings.
+    # Supports either:
+    #   "Source Header": "Target Field"
+    # or
+    #   "Source Header": ["Target Field A", "Target Field B"]
     for source_column, target_field in field_mappings.items():
         normalized_source = _normalize_header(source_column, case_sensitive=False)
         matched_source = raw_row_lookup.get(normalized_source)
-        if matched_source:
-            standardized[target_field] = raw_row.get(matched_source)
+        if not matched_source:
+            continue
+
+        source_value = raw_row.get(matched_source)
+        target_fields = target_field if isinstance(target_field, list) else [target_field]
+        for mapped_target in target_fields:
+            if mapped_target in standardized and is_blank(standardized.get(mapped_target)):
+                standardized[mapped_target] = source_value
 
     # Apply column matching with fallback strategies
     for target_field in output_columns:
@@ -632,19 +882,227 @@ def _append_row_issues(
     issues: list[tuple[str, str]],
     record: dict[str, Any],
     raw_row: dict[str, Any],
-):
+) -> bool:
+    has_blocker = False
     for field_name, reason in issues:
-        errors.append(
-            _build_error_row(
-                entity_name=entity_name,
-                source_file=source_file,
-                row_number=row_number,
-                field_name=field_name,
-                reason=reason,
-                original_value=record.get(field_name),
-                raw_row=raw_row,
+        error_row = _build_error_row(
+            entity_name=entity_name,
+            source_file=source_file,
+            row_number=row_number,
+            field_name=field_name,
+            reason=reason,
+            original_value=record.get(field_name),
+            raw_row=raw_row,
+        )
+        if error_row.get("severity", "blocker") == "blocker":
+            has_blocker = True
+        errors.append(error_row)
+
+    return has_blocker
+
+
+def _emit_progress(progress_callback: ProgressCallback | None, **event: Any) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(event)
+
+
+def _normalize_row_key(source_file: str, row_number: Any) -> tuple[str, int] | None:
+    try:
+        return source_file, int(row_number)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extend_rejected_reference_index_for_entity(
+    rejected_reference_index: dict[tuple[str, str], dict[str, list[dict[str, Any]]]],
+    entity_name: str,
+    staged_rows: list[dict[str, Any]],
+    errors: list[dict[str, Any]],
+) -> None:
+    reasons_by_row: dict[tuple[str, int], list[str]] = defaultdict(list)
+    for error in errors:
+        if error.get("severity", "blocker") != "blocker":
+            continue
+        source_file = str(error.get("source_file", "")).strip()
+        row_key = _normalize_row_key(source_file, error.get("row_number"))
+        if row_key is None:
+            continue
+
+        field_name = str(error.get("field", "")).strip()
+        reason = str(error.get("reason", "")).strip()
+        if field_name and reason:
+            reasons_by_row[row_key].append(f"{field_name}: {reason}")
+
+    if not reasons_by_row:
+        return
+
+    for row in staged_rows:
+        row_key = (row["source_file"], row["row_number"])
+        row_reasons = reasons_by_row.get(row_key)
+        if not row_reasons:
+            continue
+
+        unique_reasons = list(dict.fromkeys(row_reasons))
+        for field_name, value in row.get("data", {}).items():
+            normalized = comparable(value)
+            if normalized is None:
+                continue
+
+            rejected_reference_index.setdefault((entity_name, str(field_name)), {}).setdefault(normalized, []).append(
+                {
+                    "source_file": row["source_file"],
+                    "row_number": row["row_number"],
+                    "reasons": unique_reasons,
+                }
+            )
+
+
+def _build_customer_summary(entity_summaries: list[dict[str, Any]]) -> str:
+    total_accepted = sum(int(entity.get("rows_accepted", 0)) for entity in entity_summaries)
+    total_rejected = sum(int(entity.get("rows_rejected", 0)) for entity in entity_summaries)
+    lines = [
+        "Data Wash Summary",
+        "",
+        f"Accepted rows: {total_accepted}",
+        f"Rejected rows: {total_rejected}",
+        "",
+        "Per entity:",
+    ]
+    for entity in entity_summaries:
+        lines.append(
+            (
+                f"- {entity.get('entity')}: accepted {entity.get('rows_accepted', 0)}, "
+                f"rejected {entity.get('rows_rejected', 0)}, duplicates flagged {entity.get('duplicate_rows_flagged', 0)}"
             )
         )
+    lines.append("")
+    lines.append("Use *_errors.csv files for row-level action details and suggested fixes.")
+    return "\n".join(lines)
+
+
+def _parse_dependency_metadata(reason: str) -> dict[str, str]:
+    if "Lookup dependency note:" not in reason:
+        return {
+            "dependency_type": "primary",
+            "depends_on_entity": "",
+            "depends_on_source_file": "",
+            "depends_on_row_number": "",
+        }
+
+    depends_on_entity = ""
+    entity_match = re.search(r"referenced\s+(.+?)\s+row\s+was\s+rejected", reason)
+    if entity_match:
+        depends_on_entity = entity_match.group(1).strip()
+
+    depends_on_source_file = ""
+    depends_on_row_number = ""
+    row_match = re.search(r"example\s+([^:()]+):(\d+)", reason)
+    if row_match:
+        depends_on_source_file = row_match.group(1).strip()
+        depends_on_row_number = row_match.group(2).strip()
+
+    return {
+        "dependency_type": "downstream",
+        "depends_on_entity": depends_on_entity,
+        "depends_on_source_file": depends_on_source_file,
+        "depends_on_row_number": depends_on_row_number,
+    }
+
+
+def _classify_error(
+    *,
+    field_name: str,
+    reason: str,
+    dependency_type: str,
+) -> tuple[str, str, str]:
+    reason_lower = reason.casefold()
+    field_lower = field_name.casefold()
+
+    if dependency_type == "downstream":
+        return "REL-002", "warning", "Fix the upstream rejected record referenced in this message, then rerun."
+
+    if "must exactly match" in reason_lower or "must exist" in reason_lower:
+        if "similar existing value(s)" in reason_lower:
+            return "REL-003", "blocker", "Use the suggested similar value and make names exactly match the reference sheet."
+        return "REL-001", "blocker", "Add or correct the referenced parent value so this lookup resolves exactly."
+
+    if "field is required" in reason_lower:
+        return "VAL-001", "blocker", "Populate the required field with a non-empty value."
+
+    if "expected value of type" in reason_lower:
+        return "VAL-002", "blocker", "Use a value that matches the expected type for this field."
+
+    if "valid email" in reason_lower or "email" in field_lower:
+        return "FMT-EMAIL", "warning", "Enter a valid email format (name@example.com) or leave blank if optional."
+
+    if "valid phone" in reason_lower:
+        return "FMT-PHONE", "warning", "Enter a phone number with at least 10 digits."
+
+    if "postal" in reason_lower or "zip" in reason_lower:
+        return "FMT-POSTAL", "warning", "Provide a valid US ZIP or Canadian postal code."
+
+    if "disallowed placeholder" in reason_lower:
+        return "VAL-003", "warning", "Replace placeholder text with a real business value."
+
+    if "duplicate" in reason_lower:
+        return "DUP-001", "blocker", "Resolve duplicate records so each unique key appears once."
+
+    return "VAL-999", "blocker", "Review and correct the value based on the validation reason."
+
+
+def _build_rejected_reference_index(
+    staged_entities: dict[str, dict[str, Any]],
+) -> dict[tuple[str, str], dict[str, list[dict[str, Any]]]]:
+    index: dict[tuple[str, str], dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+
+    for entity_name, entity_state in staged_entities.items():
+        all_rows = entity_state.get("all_rows", [])
+        entity_errors = entity_state.get("errors", [])
+
+        blocker_row_keys: set[tuple[str, int]] = set()
+        reasons_by_row: dict[tuple[str, int], list[str]] = defaultdict(list)
+        for error in entity_errors:
+            if error.get("severity", "blocker") != "blocker":
+                continue
+            source_file = str(error.get("source_file", "")).strip()
+            row_number_raw = error.get("row_number")
+            try:
+                row_number = int(row_number_raw)
+            except (TypeError, ValueError):
+                continue
+
+            blocker_row_keys.add((source_file, row_number))
+
+            field_name = str(error.get("field", "")).strip()
+            reason = str(error.get("reason", "")).strip()
+            if field_name and reason:
+                reasons_by_row[(source_file, row_number)].append(f"{field_name}: {reason}")
+
+        for row in all_rows:
+            row_key = (row["source_file"], row["row_number"])
+            if row_key not in blocker_row_keys:
+                continue
+
+            row_reasons = reasons_by_row.get(row_key, [])
+            unique_reasons = list(dict.fromkeys(row_reasons))
+
+            for field_name, value in row.get("data", {}).items():
+                normalized = comparable(value)
+                if normalized is None:
+                    continue
+                index[(entity_name, str(field_name))][normalized].append(
+                    {
+                        "source_file": row["source_file"],
+                        "row_number": row["row_number"],
+                        "reasons": unique_reasons,
+                    }
+                )
+
+    return {
+        key: {value: list(rows) for value, rows in value_map.items()}
+        for key, value_map in index.items()
+    }
 
 
 def _serialize_row(raw_row: dict[str, Any]) -> str:
@@ -660,12 +1118,25 @@ def _build_error_row(
     original_value: Any,
     raw_row: dict[str, Any],
 ) -> dict[str, Any]:
+    dependency_meta = _parse_dependency_metadata(reason)
+    _error_code, severity, suggested_fix = _classify_error(
+        field_name=field_name,
+        reason=reason,
+        dependency_type=dependency_meta["dependency_type"],
+    )
+
     return {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "entity": entity_name,
         "source_file": source_file,
         "row_number": row_number,
         "field": field_name,
+        "severity": severity,
+        "dependency_type": dependency_meta["dependency_type"],
+        "depends_on_entity": dependency_meta["depends_on_entity"],
+        "depends_on_source_file": dependency_meta["depends_on_source_file"],
+        "depends_on_row_number": dependency_meta["depends_on_row_number"],
+        "suggested_fix": suggested_fix,
         "reason": reason,
         "original_value": "" if original_value is None else str(original_value),
         "raw_row": _serialize_row(raw_row),
